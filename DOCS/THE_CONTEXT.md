@@ -67,6 +67,6 @@
 
 *Space for ongoing implementation notes, debugging sessions, and technical discoveries.*
 
----
+---<!--  -->
 
 *For detailed functional requirements and business rationale, refer to THE_PLAN.md*

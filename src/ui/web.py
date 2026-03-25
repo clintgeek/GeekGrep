@@ -1,12 +1,14 @@
-"""Streamlit web interface for geekGrep."""
+"""geekGrep — Dark Luxury Document Intelligence"""
 
 import streamlit as st
 import os
 import sys
 from pathlib import Path
 from dotenv import load_dotenv
+import tempfile
+import shutil
 
-# Add app root to path for imports
+# Setup
 app_root = Path(__file__).parent.parent.parent
 if str(app_root) not in sys.path:
     sys.path.insert(0, str(app_root))
@@ -15,295 +17,265 @@ from src.pipeline import ingest, query, get_store_info
 
 load_dotenv()
 
-# Cache expensive operations
-@st.cache_resource
-def load_store_info(persist_dir):
-    """Cache store info to avoid repeated initialization."""
-    return get_store_info(persist_dir)
-
-# Page configuration
+# Page config
 st.set_page_config(
     page_title="geekGrep",
-    page_icon="📚",
+    page_icon="�",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="collapsed"
 )
 
-# Custom CSS
+# Targeted CSS — typography, spacing, polish only.
+# All component colors come from .streamlit/config.toml native theme.
 st.markdown("""
-    <style>
-    .main {
-        padding-top: 2rem;
-    }
-    .stTabs [data-baseweb="tab-list"] button {
-        font-size: 1.1rem;
-    }
-    .loading-message {
-        text-align: center;
-        color: #888;
-        font-size: 0.9rem;
-    }
-    </style>
-    """, unsafe_allow_html=True)
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;500;600;700&family=DM+Sans:wght@300;400;500;600;700&display=swap');
 
-# Show loading message on first run
-if "initialized" not in st.session_state:
-    with st.spinner("🚀 Initializing geekGrep... (first load may take 30 seconds)"):
-        # Trigger cache initialization
-        load_store_info("./data/chroma_db")
-    st.session_state.initialized = True
+/* Typography only — let Streamlit theme handle colors */
+h1, h2, h3 {
+    font-family: 'Playfair Display', Georgia, serif !important;
+}
 
+p, span, label, li, div, input, textarea, button, a, td, th, .stMarkdown {
+    font-family: 'DM Sans', sans-serif !important;
+}
+
+/* Hide default hamburger + footer */
+#MainMenu { visibility: hidden; }
+footer { visibility: hidden; }
+[data-testid="stSidebar"] { display: none !important; }
+
+/* Spacing */
+.block-container {
+    padding: 3rem 4rem 2rem 4rem !important;
+    max-width: 1200px !important;
+}
+
+/* Tab styling — keep Streamlit colors, refine shape */
+.stTabs [data-baseweb="tab-list"] {
+    gap: 0 !important;
+}
+
+.stTabs [data-baseweb="tab-list"] button {
+    font-family: 'DM Sans', sans-serif !important;
+    font-weight: 600 !important;
+    font-size: 0.9rem !important;
+    letter-spacing: 0.06em !important;
+    text-transform: uppercase !important;
+    padding: 0.8rem 1.8rem !important;
+}
+
+/* Button refinement — keep theme colors */
+.stButton > button {
+    font-family: 'DM Sans', sans-serif !important;
+    font-weight: 600 !important;
+    letter-spacing: 0.06em !important;
+    text-transform: uppercase !important;
+    border-radius: 4px !important;
+    transition: all 0.25s ease !important;
+}
+
+.stButton > button:hover {
+    transform: translateY(-1px) !important;
+    box-shadow: 0 4px 12px rgba(212, 160, 74, 0.3) !important;
+}
+
+/* Input refinement — keep theme colors */
+[data-baseweb="input"], [data-baseweb="textarea"], [data-baseweb="select"] {
+    border-radius: 4px !important;
+    font-family: 'DM Sans', sans-serif !important;
+}
+
+/* Metric cards — subtle border */
+[data-testid="stMetric"] {
+    border: 1px solid rgba(212, 160, 74, 0.2);
+    border-radius: 6px;
+    padding: 1rem;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 8px; }
+::-webkit-scrollbar-track { background: #0D0D0D; }
+::-webkit-scrollbar-thumb { background: #333; border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: #D4A04A; }
+</style>
+""", unsafe_allow_html=True)
+
+
+# ─── Helpers ────────────────────────────────────────────────────────────────
+
+_store_cache = {}
+
+def load_store_info(persist_dir):
+    """Get store info with simple caching."""
+    if persist_dir not in _store_cache:
+        _store_cache[persist_dir] = get_store_info(persist_dir)
+    return _store_cache[persist_dir]
+
+
+# ─── UI Sections ────────────────────────────────────────────────────────────
+
+def render_header():
+    """Render the brand header"""
+    st.markdown("# geekGrep")
+    st.caption("Document intelligence, locally powered.")
+    st.markdown("")
+
+
+def render_upload_tab():
+    """Render the upload / ingest tab"""
+    st.markdown("### Ingest Documents")
+    st.markdown("Upload PDF, Markdown, or plain-text files to build your searchable knowledge base.")
+    st.markdown("")
+
+    uploaded_files = st.file_uploader(
+        "Choose files",
+        type=["pdf", "md", "txt"],
+        accept_multiple_files=True,
+    )
+
+    if uploaded_files:
+        st.markdown(f"**{len(uploaded_files)} file(s) ready**")
+        for f in uploaded_files:
+            st.caption(f"  {f.name}  —  {f.size:,} bytes")
+
+    st.markdown("")
+    col1, col2, col3 = st.columns([1, 1, 2])
+
+    with col1:
+        reset = st.checkbox("Reset store first")
+    with col2:
+        go = st.button("Ingest", use_container_width=True, type="primary")
+
+    if go:
+        if not uploaded_files:
+            st.warning("Select at least one file first.")
+        else:
+            with st.spinner("Processing …"):
+                temp_dir = tempfile.mkdtemp()
+                try:
+                    for f in uploaded_files:
+                        Path(temp_dir, f.name).write_bytes(f.getbuffer())
+                    result = ingest(temp_dir, "./data/chroma_db", reset=reset)
+
+                    if result["status"] == "success":
+                        st.success(
+                            f"Done — {result['documents_loaded']} docs, "
+                            f"{result['chunks_created']} chunks indexed."
+                        )
+                    else:
+                        st.error(result["message"])
+                finally:
+                    shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def render_query_tab():
+    """Render the query tab"""
+    st.markdown("### Ask Your Documents")
+    st.markdown("")
+
+    # Metrics row
+    store_info = load_store_info("./data/chroma_db")
+    if store_info["status"] == "success":
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Indexed Docs", store_info["document_count"])
+        m2.metric("Store Status", "Ready" if store_info["document_count"] > 0 else "Empty")
+        m3.metric("LLM Backend", os.getenv("GEEKGREP_LLM_BACKEND", "openai").title())
+        st.markdown("")
+
+    # Query input
+    question = st.text_area(
+        "Your question",
+        placeholder="e.g.  What are the key findings in section 3?",
+        height=100,
+    )
+
+    # Settings row
+    c1, c2, c3 = st.columns([1, 1, 1])
+    with c1:
+        top_k = st.slider("Sources to retrieve", 1, 10, 4)
+    with c2:
+        file_type = st.selectbox("File type filter", ["All", "PDF", "Markdown", "Text"])
+    with c3:
+        st.markdown("")
+        ask = st.button("Search & Answer", use_container_width=True, type="primary")
+
+    # Execute
+    if ask:
+        if not question.strip():
+            st.warning("Type a question first.")
+        else:
+            with st.spinner("Searching …"):
+                ft_map = {"All": None, "PDF": "pdf", "Markdown": "md", "Text": "txt"}
+                result = query(
+                    question, "./data/chroma_db",
+                    k=top_k, file_type=ft_map[file_type],
+                )
+
+            if result["status"] == "success":
+                st.markdown("---")
+                st.markdown("#### Answer")
+                st.markdown(result["answer"])
+
+                if result["sources"]:
+                    st.markdown("#### Sources")
+                    for i, src in enumerate(result["sources"], 1):
+                        with st.expander(f"Source {i} — {Path(src['filename']).name}"):
+                            st.caption(src["filename"])
+                            st.caption(f"Type: {src['file_type']}")
+                else:
+                    st.info("No matching sources found.")
+            else:
+                st.error(result["answer"])
+
+
+def render_settings_tab():
+    """Render the settings tab"""
+    st.markdown("### Configuration")
+    st.markdown("")
+
+    c1, c2 = st.columns(2)
+
+    with c1:
+        st.markdown("**LLM Backend**")
+        backend = st.radio(
+            "Backend", ["OpenAI", "Ollama"],
+            horizontal=True, label_visibility="collapsed",
+        )
+        os.environ["GEEKGREP_LLM_BACKEND"] = backend.lower()
+
+    with c2:
+        st.markdown("**Model**")
+        models = (
+            ["gpt-4o-mini", "gpt-4o", "gpt-3.5-turbo"]
+            if backend == "OpenAI"
+            else ["mistral", "llama2", "neural-chat"]
+        )
+        model = st.selectbox("Model", models, label_visibility="collapsed")
+        os.environ["GEEKGREP_MODEL"] = model
+
+
+# ─── Main ───────────────────────────────────────────────────────────────────
 
 def main():
-    st.title("📚 geekGrep")
-    st.markdown("*Intelligent document query system powered by local AI*")
-    
-    # Sidebar configuration
-    with st.sidebar:
-        st.header("⚙️ Configuration")
-        
-        # Backend selection
-        backend = st.radio(
-            "LLM Backend",
-            options=["OpenAI", "Ollama"],
-            help="Choose between cloud (OpenAI) or local (Ollama) inference"
-        )
-        
-        backend_value = "openai" if backend == "OpenAI" else "ollama"
-        os.environ["GEEKGREP_LLM_BACKEND"] = backend_value
-        
-        # Model selection
-        if backend == "OpenAI":
-            model = st.selectbox(
-                "Model",
-                options=["gpt-4o-mini", "gpt-4o", "gpt-3.5-turbo"],
-                help="Select the OpenAI model to use"
-            )
-        else:
-            model = st.selectbox(
-                "Model",
-                options=["mistral", "llama2", "neural-chat"],
-                help="Select the Ollama model to use"
-            )
-        
-        os.environ["GEEKGREP_MODEL"] = model
-        
-        # Vector store settings
-        st.divider()
-        st.subheader("Vector Store")
-        
-        persist_dir = st.text_input(
-            "Store Location",
-            value="./data/chroma_db",
-            help="Path where the vector store is saved"
-        )
-        
-        # Store info (cached)
-        store_info = load_store_info(persist_dir)
-        if store_info["status"] == "success":
-            st.metric("Documents Stored", store_info["document_count"])
-        
-        # Ingestion section
-        st.divider()
-        st.subheader("📥 Ingest Documents")
-        
-        # File upload option
-        uploaded_files = st.file_uploader(
-            "Upload documents (drag & drop or click)",
-            type=["pdf", "md", "txt"],
-            accept_multiple_files=True,
-            help="Upload PDF, Markdown, or text files"
-        )
-        
-        if uploaded_files:
-            reset_store = st.checkbox("Reset Store", value=False)
-            if st.button("📤 Upload & Ingest", use_container_width=True, type="primary"):
-                with st.spinner("Uploading and ingesting documents..."):
-                    # Create temp directory for uploads
-                    import tempfile
-                    import shutil
-                    
-                    temp_dir = tempfile.mkdtemp()
-                    try:
-                        # Save uploaded files
-                        for uploaded_file in uploaded_files:
-                            file_path = Path(temp_dir) / uploaded_file.name
-                            file_path.write_bytes(uploaded_file.getbuffer())
-                        
-                        # Ingest from temp directory
-                        result = ingest(temp_dir, persist_dir, reset=reset_store)
-                        
-                        if result["status"] == "success":
-                            st.success(
-                                f"✓ Ingested {result['documents_loaded']} documents "
-                                f"into {result['chunks_created']} chunks"
-                            )
-                        else:
-                            st.error(f"Ingestion failed: {result['message']}")
-                    finally:
-                        shutil.rmtree(temp_dir, ignore_errors=True)
-        else:
-            # Directory ingestion option
-            st.info("Or ingest from a directory:")
-            docs_dir = st.text_input(
-                "Documents Directory",
-                value="./documents",
-                help="Directory containing PDF, Markdown, or text files"
-            )
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                reset_store = st.checkbox("Reset Store", value=False)
-            
-            with col2:
-                if st.button("🔄 Ingest", use_container_width=True):
-                    if not Path(docs_dir).exists():
-                        st.error(f"Directory not found: {docs_dir}")
-                    else:
-                        with st.spinner("Ingesting documents..."):
-                            result = ingest(docs_dir, persist_dir, reset=reset_store)
-                        
-                        if result["status"] == "success":
-                            st.success(
-                                f"✓ Ingested {result['documents_loaded']} documents "
-                                f"into {result['chunks_created']} chunks"
-                            )
-                        else:
-                            st.error(f"Ingestion failed: {result['message']}")
-    
-    # Main content area
-    tab1, tab2 = st.tabs(["📤 Upload", "🔍 Query"])
-    
-    with tab1:
-        st.header("Upload Documents")
-        
-        uploaded_files = st.file_uploader(
-            "Drag and drop files here or click to browse",
-            type=["pdf", "md", "txt"],
-            accept_multiple_files=True,
-            key="main_uploader",
-            help="Upload PDF, Markdown, or text files"
-        )
-        
-        if uploaded_files:
-            col1, col2 = st.columns(2)
-            with col1:
-                reset_store = st.checkbox("Reset Store before uploading", value=False, key="main_reset")
-            
-            with col2:
-                st.write("")  # Spacer
-            
-            # Display file list
-            st.subheader("Files to upload:")
-            for file in uploaded_files:
-                st.write(f"• {file.name} ({file.size:,} bytes)")
-            
-            if st.button("📤 Upload & Ingest", use_container_width=True, type="primary", key="main_upload_btn"):
-                with st.spinner("Uploading and ingesting documents..."):
-                    import tempfile
-                    import shutil
-                    
-                    temp_dir = tempfile.mkdtemp()
-                    try:
-                        # Save uploaded files
-                        for uploaded_file in uploaded_files:
-                            file_path = Path(temp_dir) / uploaded_file.name
-                            file_path.write_bytes(uploaded_file.getbuffer())
-                        
-                        # Ingest from temp directory
-                        result = ingest(temp_dir, persist_dir, reset=reset_store)
-                        
-                        if result["status"] == "success":
-                            st.success(
-                                f"✓ Ingested {result['documents_loaded']} documents "
-                                f"into {result['chunks_created']} chunks"
-                            )
-                            st.balloons()
-                        else:
-                            st.error(f"Ingestion failed: {result['message']}")
-                    finally:
-                        shutil.rmtree(temp_dir, ignore_errors=True)
-        else:
-            st.info("👆 Upload documents to get started")
-    
-    with tab2:
-        st.header("🔍 Query Documents")
-        
-        # Query input
-        question = st.text_area(
-            "Ask a question about your documents:",
-            placeholder="What is...",
-            height=100
-        )
-        
-        # Query settings
-        col1, col2 = st.columns(2)
-        with col1:
-            top_k = st.slider(
-                "Number of documents to retrieve",
-                min_value=1,
-                max_value=10,
-                value=4
-            )
-        
-        with col2:
-            file_type_filter = st.selectbox(
-                "Filter by file type (optional)",
-                options=["All", "PDF", "Markdown", "Text"],
-                help="Limit search to specific file types"
-            )
-        
-        file_type_map = {
-            "All": None,
-            "PDF": "pdf",
-            "Markdown": "md",
-            "Text": "txt"
-        }
-        
-        # Query button
-        if st.button("🚀 Ask", use_container_width=True, type="primary"):
-            if not question.strip():
-                st.warning("Please enter a question")
-            else:
-                with st.spinner("Searching and generating answer..."):
-                    result = query(
-                        question,
-                        persist_dir,
-                        k=top_k,
-                        file_type=file_type_map[file_type_filter]
-                    )
-                
-                if result["status"] == "success":
-                    # Display answer
-                    st.markdown("### Answer")
-                    st.markdown(result["answer"])
-                    
-                    # Display sources
-                    if result["sources"]:
-                        st.markdown("### 📄 Sources")
-                        
-                        for i, source in enumerate(result["sources"], 1):
-                            with st.expander(
-                                f"Source {i}: {Path(source['filename']).name} "
-                                f"(chunk {source['chunk_index']})"
-                            ):
-                                st.caption(f"File: {source['filename']}")
-                                st.caption(f"Type: {source['file_type']}")
-                    else:
-                        st.info("No sources found for this query")
-                else:
-                    st.error(f"Query failed: {result['answer']}")
-    
+    render_header()
+
+    tab_upload, tab_query, tab_settings = st.tabs([
+        "UPLOAD", "QUERY", "SETTINGS"
+    ])
+
+    with tab_upload:
+        render_upload_tab()
+
+    with tab_query:
+        render_query_tab()
+
+    with tab_settings:
+        render_settings_tab()
+
     # Footer
-    st.divider()
-    st.markdown(
-        """
-        <div style='text-align: center; color: gray; font-size: 0.8rem;'>
-        geekGrep v1.0 | Local RAG Document Query System
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
+    st.markdown("---")
+    st.caption("geekGrep v1.0  ·  Local RAG Document Query System")
 
 
 if __name__ == "__main__":
