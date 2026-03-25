@@ -1,0 +1,61 @@
+services:
+  geekgrep:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./documents:/documents
+      - ./data:/data
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - GEEKGREP_LLM_BACKEND=${GEEKGREP_LLM_BACKEND:-openai}
+      - GEEKGREP_MODEL=${GEEKGREP_MODEL:-gpt-4o-mini}
+      - GEEKGREP_DATA_DIR=/data
+      - GEEKGREP_DOCUMENTS_DIR=/documents
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Optional: Local Ollama service for offline mode
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    environment:
+      - OLLAMA_HOST=0.0.0.0:11434
+    profiles:
+      - local
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  ollama_data:
+
+# Usage:
+# 
+# Default (OpenAI mode):
+#   docker-compose up
+#
+# Local mode (with Ollama):
+#   docker-compose --profile local up
+#
+# Build only:
+#   docker-compose build
+#
+# Stop:
+#   docker-compose down
+#
+# View logs:
+#   docker-compose logs -f geekgrep
