@@ -59,3 +59,42 @@ def test_format_retrieved_context_includes_source(sample_documents):
     result = format_retrieved_context(sample_documents)
     assert "python.txt" in result
     assert "javascript.txt" in result
+
+def test_retrieve_documents_with_filters(monkeypatch):
+    """Test retrieve_documents handles file_type and modified_after filters correctly."""
+    
+    class MockStore:
+        def __init__(self):
+            self.last_query = None
+            self.last_k = None
+            self.last_where = None
+            
+        def similarity_search(self, query, k=4, where=None):
+            self.last_query = query
+            self.last_k = k
+            self.last_where = where
+            return []
+            
+    mock_store = MockStore()
+    
+    def mock_get_store(*args, **kwargs):
+        return mock_store
+        
+    import src.retrieval.retriever as r
+    monkeypatch.setattr(r, "get_store", mock_get_store)
+    
+    # Test without filters
+    r.retrieve_documents("test query")
+    assert mock_store.last_where is None
+    
+    # Test with file_type filter
+    r.retrieve_documents("test query", file_type="pdf")
+    assert mock_store.last_where == {"file_type": "pdf"}
+    
+    # Test with modified_after filter
+    r.retrieve_documents("test query", modified_after="2023-01-01T00:00:00")
+    assert mock_store.last_where == {"modified_date": {"$gte": "2023-01-01T00:00:00"}}
+    
+    # Test with both filters
+    r.retrieve_documents("test query", file_type="md", modified_after="2023-01-01")
+    assert mock_store.last_where == {"file_type": "md", "modified_date": {"$gte": "2023-01-01"}}

@@ -64,3 +64,35 @@ def test_store_initialization(temp_store_dir):
     store = get_store(temp_store_dir)
     assert store is not None
     assert hasattr(store, 'similarity_search')
+
+
+def test_reset_store(temp_store_dir, sample_chunks):
+    """Test resetting the vector store."""
+    add_documents(sample_chunks[:1], temp_store_dir)
+    assert os.path.exists(temp_store_dir)
+    
+    reset_store(temp_store_dir)
+    
+    # Store directory might still exist until chromadb shuts down entirely or we should see it's cleared
+    # But reset_store calls rmtree, so it should be gone
+    assert not os.path.exists(temp_store_dir)
+    
+    from src.embedding.store import _store
+    assert _store is None
+
+def test_reset_store_exception(monkeypatch, temp_store_dir):
+    """Test reset store handles exception gracefully."""
+    def mock_rmtree(*args, **kwargs):
+        raise ValueError("Simulated error")
+    
+    import shutil
+    monkeypatch.setattr(shutil, "rmtree", mock_rmtree)
+    
+    get_store(temp_store_dir)
+    reset_store(temp_store_dir)
+    # The exception should be caught and logged
+    from src.embedding.store import _store
+    assert _store is None
+    
+    # Undo monkeypatch so it doesn't affect the fixture teardown
+    monkeypatch.undo()
