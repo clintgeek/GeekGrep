@@ -1,12 +1,15 @@
 """Document loaders for PDF, Markdown, and text files."""
 
 import os
+import logging
 from pathlib import Path
 from datetime import datetime
 from typing import List
 
 from langchain_community.document_loaders import PyPDFLoader, TextLoader, UnstructuredMarkdownLoader
 from langchain_core.documents import Document
+
+logger = logging.getLogger(__name__)
 
 
 def load_documents(directory_path: str) -> List[Document]:
@@ -43,7 +46,7 @@ def load_documents(directory_path: str) -> List[Document]:
                 ).isoformat()
             documents.extend(docs)
         except Exception as e:
-            print(f"Error loading PDF {pdf_file}: {e}")
+            logger.error(f"Error loading PDF {pdf_file}: {e}")
     
     # Load Markdown files
     for md_file in md_files:
@@ -58,7 +61,7 @@ def load_documents(directory_path: str) -> List[Document]:
                 ).isoformat()
             documents.extend(docs)
         except Exception as e:
-            print(f"Error loading Markdown {md_file}: {e}")
+            logger.error(f"Error loading Markdown {md_file}: {e}")
     
     # Load text files
     for txt_file in txt_files:
@@ -73,6 +76,6 @@ def load_documents(directory_path: str) -> List[Document]:
                 ).isoformat()
             documents.extend(docs)
         except Exception as e:
-            print(f"Error loading text file {txt_file}: {e}")
+            logger.error(f"Error loading text file {txt_file}: {e}")
     
     return documents

@@ -1,14 +1,16 @@
 """Vector store initialization and management using ChromaDB."""
 
 import os
+import threading
 from typing import List, Optional
 from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_core.documents import Document
 
 
-# Global store instance
+# Global store instance and thread lock
 _store = None
+_store_lock = threading.RLock()
 
 
 def get_embeddings():
@@ -28,17 +30,18 @@ def get_store(persist_directory: str = "./data/chroma_db") -> Chroma:
     """
     global _store
     
-    if _store is None:
-        os.makedirs(persist_directory, exist_ok=True)
-        embeddings = get_embeddings()
-        _store = Chroma(
-            embedding_function=embeddings,
-            persist_directory=persist_directory,
-            collection_name="documents",
-            collection_metadata={"hnsw:space": "cosine"}
-        )
-    
-    return _store
+    with _store_lock:
+        if _store is None:
+            os.makedirs(persist_directory, exist_ok=True)
+            embeddings = get_embeddings()
+            _store = Chroma(
+                embedding_function=embeddings,
+                persist_directory=persist_directory,
+                collection_name="documents",
+                collection_metadata={"hnsw:space": "cosine"}
+            )
+        
+        return _store
 
 
 def add_documents(chunks: List[Document], persist_directory: str = "./data/chroma_db") -> None:
@@ -52,8 +55,9 @@ def add_documents(chunks: List[Document], persist_directory: str = "./data/chrom
     if not chunks:
         return
     
-    store = get_store(persist_directory)
-    store.add_documents(chunks)
+    with _store_lock:
+        store = get_store(persist_directory)
+        store.add_documents(chunks)
 
 
 def reset_store(persist_directory: str = "./data/chroma_db") -> None:
@@ -65,10 +69,15 @@ def reset_store(persist_directory: str = "./data/chroma_db") -> None:
     """
     global _store
     
-    # Delete the directory
-    import shutil
-    if os.path.exists(persist_directory):
-        shutil.rmtree(persist_directory)
-    
-    # Reset the global instance
-    _store = None
+    with _store_lock:
+        # Delete the directory
+        import shutil
+        if os.path.exists(persist_directory):
+            try:
+                shutil.rmtree(persist_directory)
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).error(f"Error resetting store: {e}")
+        
+        # Reset the global instance
+        _store = None

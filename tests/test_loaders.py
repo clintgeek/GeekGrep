@@ -54,3 +54,32 @@ def test_load_documents_nonexistent_dir():
     """Test that load_documents raises error for nonexistent directory."""
     with pytest.raises(ValueError):
         load_documents("/nonexistent/directory")
+
+def test_load_documents_with_corrupt_files(temp_docs_dir, caplog):
+    """Test that loaders handle corrupted files gracefully by logging and continuing."""
+    import logging
+    
+    # Create corrupt files
+    bad_pdf = Path(temp_docs_dir) / "corrupt.pdf"
+    bad_pdf.write_text("Not a real PDF")
+    
+    # The actual PyPDFLoader might throw an error when loading a broken PDF.
+    
+    bad_md_path = Path(temp_docs_dir) / "missing_perms.txt"
+    bad_md_path.write_text("Content")
+    
+    def buggy_loader(*args, **kwargs):
+        raise RuntimeError("Mocked Loader Error")
+    
+    import src.ingestion.loaders as l
+    
+    # Monkeypatch PyPDFLoader, UnstructuredMarkdownLoader, TextLoader to simulate errors
+    # Wait, the best way to simulate exception is to actually let PyPDF fail on invalid PDF
+    
+    with caplog.at_level(logging.ERROR):
+        docs = load_documents(temp_docs_dir)
+        
+    # Valid docs should still be loaded
+    assert len(docs) > 0
+    # There should be an error logged for the corrupt PDF
+    assert any("Error loading PDF" in record.message for record in caplog.records)

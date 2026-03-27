@@ -2,6 +2,8 @@
 
 import os
 import logging
+import threading
+import time
 from pathlib import Path
 from typing import Callable, Optional
 from watchdog.observers import Observer
@@ -18,6 +20,7 @@ class DocumentEventHandler(FileSystemEventHandler):
     """Handles file system events for document changes."""
     
     SUPPORTED_EXTENSIONS = {'.pdf', '.md', '.txt'}
+    DEBOUNCE_SECONDS = 2.0
     
     def __init__(
         self,
@@ -33,6 +36,49 @@ class DocumentEventHandler(FileSystemEventHandler):
         """
         self.persist_directory = persist_directory
         self.on_change = on_change
+        
+        self._pending_files = {}  # file_path -> (last_modified_time, last_size)
+        self._lock = threading.Lock()
+        
+        self._running = True
+        self._process_thread = threading.Thread(target=self._process_pending_files, daemon=True)
+        self._process_thread.start()
+        
+    def stop(self):
+        """Stop the background processing thread."""
+        self._running = False
+        if self._process_thread.is_alive():
+            self._process_thread.join(timeout=2.0)
+            
+    def _mark_file_pending(self, file_path: str):
+        try:
+            size = os.path.getsize(file_path)
+            with self._lock:
+                self._pending_files[file_path] = (time.time(), size)
+        except OSError:
+            pass
+
+    def _process_pending_files(self):
+        """Background thread to process files after they stabilize."""
+        while self._running:
+            time.sleep(1.0)
+            now = time.time()
+            files_to_process = []
+            
+            with self._lock:
+                for file_path, (last_time, last_size) in list(self._pending_files.items()):
+                    try:
+                        current_size = os.path.getsize(file_path)
+                        if current_size != last_size:
+                            self._pending_files[file_path] = (now, current_size)
+                        elif now - last_time > self.DEBOUNCE_SECONDS:
+                            files_to_process.append(file_path)
+                            del self._pending_files[file_path]
+                    except OSError:
+                        del self._pending_files[file_path]
+            
+            for file_path in files_to_process:
+                self._ingest_file(file_path)
     
     def _is_supported_file(self, path: str) -> bool:
         """Check if file has a supported extension."""
@@ -47,7 +93,7 @@ class DocumentEventHandler(FileSystemEventHandler):
             return
         
         logger.info(f"New file detected: {event.src_path}")
-        self._ingest_file(event.src_path)
+        self._mark_file_pending(event.src_path)
     
     def on_modified(self, event: FileModifiedEvent) -> None:
         """Handle file modification."""
@@ -57,8 +103,8 @@ class DocumentEventHandler(FileSystemEventHandler):
         if not self._is_supported_file(event.src_path):
             return
         
-        logger.info(f"File modified: {event.src_path}")
-        self._ingest_file(event.src_path)
+        logger.debug(f"File modified: {event.src_path}")
+        self._mark_file_pending(event.src_path)
     
     def on_deleted(self, event: FileDeletedEvent) -> None:
         """Handle file deletion."""
@@ -69,6 +115,9 @@ class DocumentEventHandler(FileSystemEventHandler):
             return
         
         logger.info(f"File deleted: {event.src_path}")
+        with self._lock:
+            if event.src_path in self._pending_files:
+                del self._pending_files[event.src_path]
         self._remove_file_from_store(event.src_path)
     
     def _ingest_file(self, file_path: str) -> None:
@@ -165,6 +214,9 @@ class DocumentWatcher:
     
     def stop(self) -> None:
         """Stop watching the directory."""
-        self.observer.stop()
-        self.observer.join()
+        if self.observer.is_alive():
+            self.observer.stop()
+            self.observer.join()
+        if hasattr(self.event_handler, "stop"):
+            self.event_handler.stop()
         logger.info("Stopped watching directory")
